@@ -9,8 +9,13 @@ begin
   where lower(u.email) = 'rz2763@columbia.edu' and u.email_confirmed_at is not null
     and exists(select 1 from auth.identities i where i.user_id = u.id and i.provider = 'google');
   if target is null then raise exception 'Sign in to Melon with rz2763@columbia.edu using Google first, then rerun this script.'; end if;
-  insert into public.profiles(id, email, first_name, last_name, is_superadmin)
-    values(target, 'rz2763@columbia.edu', 'Rebecca', null, true)
-    on conflict(id) do update set is_superadmin = true;
+  -- The live Melon profiles table does not have a unique constraint on id.
+  -- Lock during the owner-only bootstrap to avoid racing an insert.
+  lock table public.profiles in share row exclusive mode;
+  update public.profiles set is_superadmin = true where id = target;
+  if not found then
+    insert into public.profiles(id, email, first_name, last_name, is_superadmin)
+      values(target, 'rz2763@columbia.edu', 'Rebecca', null, true);
+  end if;
 end;
 $$;
