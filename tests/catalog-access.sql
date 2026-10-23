@@ -1,0 +1,100 @@
+-- Rollback-only regression suite. Run in a disposable database AFTER 004.
+begin;
+create function pg_temp.check_true(value boolean, message text) returns void language plpgsql as $$
+begin if value is distinct from true then raise exception 'FAIL: %',message; end if; end $$;
+create function pg_temp.expect_error(statement text, expected text) returns void language plpgsql as $$
+begin
+  begin execute statement; exception when others then
+    if sqlstate = expected then return; end if;
+    raise exception 'Unexpected SQLSTATE % for %: %',sqlstate,statement,sqlerrm;
+  end;
+  raise exception 'FAIL: statement succeeded: %',statement;
+end $$;
+insert into auth.users(id,email,email_confirmed_at,raw_app_meta_data) values
+ ('51000000-0000-0000-0000-000000000001','admin@example.test',now(),'{"provider":"google"}'),
+ ('51000000-0000-0000-0000-000000000002','ordinary@example.test',now(),'{"provider":"google"}');
+insert into auth.identities(user_id,provider) values('51000000-0000-0000-0000-000000000001','google'),('51000000-0000-0000-0000-000000000002','google');
+insert into public.profiles(id,email,is_superadmin) select id,email,id='51000000-0000-0000-0000-000000000001' from auth.users where id::text like '51000000-%';
+insert into public.prompt_chains(id,name,description) values('52000000-0000-0000-0000-000000000001','Test chain','Owner-created chain');
+insert into public.prompt_chain_steps(id,prompt_chain_id,step_order,name,user_prompt) values('53000000-0000-0000-0000-000000000001','52000000-0000-0000-0000-000000000001',1,'Caption','Write a caption.');
+insert into public.generation_requests(id,prompt,status) values('54000000-0000-0000-0000-000000000001','A real recorded request','completed');
+insert into public.llm_responses(generation_request_id,response_text,input_tokens,output_tokens,latency_ms) values('54000000-0000-0000-0000-000000000001','Recorded response',15,5,250);
+set local role anon;
+select pg_temp.expect_error($q$select public.admin_catalog_list('terms')$q$,'42501');
+select pg_temp.expect_error($q$select public.admin_catalog_save('terms',null,'{"term":"Injected","definition":"Bad"}')$q$,'42501');
+set local role authenticated;
+select set_config('request.jwt.claims','{"sub":"51000000-0000-0000-0000-000000000002","app_metadata":{"provider":"google"},"amr":[{"method":"oauth"}]}',true);
+select pg_temp.expect_error($q$select public.admin_catalog_list('terms')$q$,'42501');
+select pg_temp.expect_error($q$select public.admin_catalog_get('terms',gen_random_uuid())$q$,'42501');
+select pg_temp.expect_error($q$select public.admin_catalog_options('providers')$q$,'42501');
+select pg_temp.expect_error($q$select public.admin_catalog_stats()$q$,'42501');
+select pg_temp.expect_error($q$select public.admin_catalog_save('terms',null,'{"term":"Injected","definition":"Bad"}')$q$,'42501');
+select pg_temp.expect_error($q$select public.admin_catalog_delete('terms',gen_random_uuid())$q$,'42501');
+select pg_temp.expect_error($q$select * from public.terms$q$,'42501');
+select pg_temp.expect_error($q$insert into public.terms(term,definition) values('Injected','Bad')$q$,'42501');
+select pg_temp.expect_error($q$insert into storage.objects(bucket_id,name) values('admin-images','51000000-0000-0000-0000-000000000002/bad.png')$q$,'42501');
+select set_config('request.jwt.claims','{"sub":"51000000-0000-0000-0000-000000000001","app_metadata":{"provider":"google"},"amr":[{"method":"password"}]}',true);
+select pg_temp.expect_error($q$select public.admin_catalog_list('terms')$q$,'42501');
+select set_config('request.jwt.claims','{"sub":"51000000-0000-0000-0000-000000000001","app_metadata":{"provider":"google"},"amr":[{"method":"oauth"}]}',true);
+select pg_temp.check_true(public.admin_is_authorized(),'superadmin authorized');
+select pg_temp.expect_error($q$select public.admin_catalog_list('profiles;drop table profiles')$q$,'P0001');
+select pg_temp.expect_error($q$select public.admin_catalog_save('prompt-chains',null,'{"name":"Injected"}')$q$,'42501');
+select pg_temp.expect_error($q$select public.admin_catalog_save('prompt-chain-steps','53000000-0000-0000-0000-000000000001','{"user_prompt":"Overwrite"}')$q$,'42501');
+select pg_temp.expect_error($q$select public.admin_catalog_save('generation-requests','54000000-0000-0000-0000-000000000001','{"status":"failed"}')$q$,'42501');
+select pg_temp.expect_error($q$select public.admin_catalog_delete('llm-responses',gen_random_uuid())$q$,'42501');
+select pg_temp.expect_error($q$select public.admin_catalog_save('terms',null,'{"term":"Injected","definition":"Bad","is_superadmin":true}')$q$,'P0001');
+select pg_temp.expect_error($q$select public.admin_catalog_save('whitelisted-emails',null,'{"email":"not an email"}')$q$,'23514');
+select pg_temp.expect_error($q$select public.admin_catalog_save('signup-domains',null,'{"domain":"https://example.com"}')$q$,'23514');
+select pg_temp.check_true((public.admin_catalog_list('prompt-chains')->>'total')::int>=1,'read chains');
+select pg_temp.check_true((public.admin_catalog_list('prompt-chain-steps')->>'total')::int>=1,'read steps');
+select pg_temp.check_true(public.admin_catalog_get('generation-requests','54000000-0000-0000-0000-000000000001')->>'status'='completed','read request');
+select pg_temp.check_true((public.admin_catalog_list('llm-responses')->>'total')::int>=1,'read responses');
+select pg_temp.check_true((public.admin_catalog_stats()->>'tokens')::int>=20,'token aggregation');
+do $$
+declare provider uuid; model uuid; term uuid; image uuid; example uuid; domain uuid; email uuid; mix uuid; result jsonb;
+begin
+  provider := public.admin_catalog_save('providers',null,'{"name":"Test provider","base_url":"https://example.test/v1","enabled":true}');
+  model := public.admin_catalog_save('models',null,jsonb_build_object('name','Test model','provider_id',provider,'model_key','test','context_window',1000));
+  perform pg_temp.expect_error(format('select public.admin_catalog_delete(''providers'',%L)',provider),'23503');
+  term := public.admin_catalog_save('terms',null,'{"term":"%_literal","definition":"Testing literal search","category":"Fixture"}');
+  perform pg_temp.check_true((public.admin_catalog_list('terms','%_literal')->>'total')::int=1,'literal search, no wildcard interpretation');
+  perform public.admin_catalog_save('terms',term,'{"definition":"Updated definition"}');
+  perform pg_temp.check_true(public.admin_catalog_get('terms',term)->>'definition'='Updated definition','term updated');
+  insert into storage.objects(bucket_id,name) values('admin-images','51000000-0000-0000-0000-000000000001/test.png');
+  image := public.admin_catalog_save('images',null,'{"name":"Test image","alt_text":"Alt","storage_path":"51000000-0000-0000-0000-000000000001/test.png","mime_type":"image/png"}');
+  perform pg_temp.check_true(public.admin_catalog_get('images',image)->>'created_by'=auth.uid()::text,'image owner forced to current admin');
+  perform pg_temp.check_true(public.admin_library_image_in_use('51000000-0000-0000-0000-000000000001/test.png'),'image path is protected');
+  delete from storage.objects where bucket_id='admin-images' and name='51000000-0000-0000-0000-000000000001/test.png';
+  perform pg_temp.check_true(exists(select 1 from storage.objects where bucket_id='admin-images' and name='51000000-0000-0000-0000-000000000001/test.png'),'referenced storage objects cannot be deleted despite legacy own-object policy');
+  perform pg_temp.expect_error($q$select public.admin_catalog_save('images',null,'{"name":"Bad","storage_path":"other-user/test.png","mime_type":"image/png"}')$q$,'P0001');
+  example := public.admin_catalog_save('examples',null,jsonb_build_object('prompt','Test prompt','caption','Test caption','image_id',image,'term_id',term));
+  perform pg_temp.expect_error(format('select public.admin_catalog_delete(''images'',%L)',image),'23503');
+  perform pg_temp.expect_error(format('select public.admin_catalog_delete(''terms'',%L)',term),'23503');
+  perform public.admin_catalog_save('examples',example,'{"caption":"Updated caption"}');
+  perform pg_temp.check_true(public.admin_catalog_get('examples',example)->>'caption'='Updated caption','example updated');
+  domain := public.admin_catalog_save('signup-domains',null,'{"domain":"example.test","enabled":true}');
+  perform public.admin_catalog_save('signup-domains',domain,'{"enabled":false}');
+  email := public.admin_catalog_save('whitelisted-emails',null,'{"email":"ta@example.test","enabled":true}');
+  perform public.admin_catalog_save('whitelisted-emails',email,'{"notes":"Course assistant"}');
+  mix := (public.admin_catalog_list('prompt-chain-mix','52000000-0000-0000-0000-000000000001')->'items'->0->>'id')::uuid;
+  perform public.admin_catalog_save('prompt-chain-mix',mix,'{"weight":0,"enabled":false}');
+  perform pg_temp.check_true((public.admin_catalog_get('prompt-chain-mix',mix)->>'weight')::numeric=0,'zero weight preserved');
+  perform pg_temp.expect_error(format('select public.admin_catalog_save(''prompt-chain-mix'',%L,''{"weight":-1}'')',mix),'23514');
+  perform pg_temp.expect_error(format('select public.admin_catalog_save(''prompt-chain-mix'',%L,''{"prompt_chain_id":"52000000-0000-0000-0000-000000000001"}'')',mix),'P0001');
+  perform public.admin_catalog_delete('examples',example);
+  perform public.admin_catalog_delete('images',image);
+  delete from storage.objects where bucket_id='admin-images' and name='51000000-0000-0000-0000-000000000001/test.png';
+  perform public.admin_catalog_delete('terms',term);
+  perform public.admin_catalog_save('models',model,'{"name":"Updated model"}');
+  perform public.admin_catalog_delete('models',model);
+  perform public.admin_catalog_save('providers',provider,'{"name":"Updated provider"}');
+  perform public.admin_catalog_delete('providers',provider);
+  perform public.admin_catalog_delete('signup-domains',domain);
+  perform public.admin_catalog_delete('whitelisted-emails',email);
+  perform pg_temp.check_true(public.admin_catalog_get('terms',term) is null,'deletion removes record');
+end $$;
+reset role;
+update public.profiles set is_superadmin=false where id='51000000-0000-0000-0000-000000000001';
+set local role authenticated;
+select pg_temp.expect_error($q$select public.admin_catalog_list('terms')$q$,'42501');
+rollback;

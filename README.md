@@ -120,3 +120,71 @@ vote/comment cleanup, immediate revocation, and literal search handling.
 For PostgreSQL 14 only, omit `with (security_invoker = false)` from a temporary
 copy of Melon's profile-card view migration (the default is equivalent). Hosted
 Supabase runs a newer PostgreSQL version. Never load fixture.sql in production.
+
+## Expanded generation administration
+
+Run `supabase/004-generation-admin.sql` as the database owner in the same Melon
+project after `001-admin.sql`. It adds the missing supporting tables, private
+`admin-images` bucket, fixed resource allowlists, and guarded RPCs. It preserves
+`ai_generations`, existing admins, existing media, and Melon's login behavior.
+The migration is transactional and safe to rerun. If any of these supporting tables
+already exist with a different schema, inspect/align their definitions before applying.
+
+Open **Generation console** (`/manage`) for counts, recorded failures, token usage,
+mean latency, configured chain allocation, and links to all twelve sections.
+
+| Section | Table | Allowed operations |
+| --- | --- | --- |
+| People | profiles | Read |
+| Prompt chains | prompt_chains | Read |
+| Prompt chain steps | prompt_chain_steps | Read |
+| Prompt chain mix | prompt_chain_mix | Read, update weight/enabled |
+| Terms | terms | Create, read, update, delete |
+| AI generation examples | ai_generation_examples | Create, read, update, delete |
+| LLM models | llm_models | Create, read, update, delete |
+| LLM providers | llm_providers | Create, read, update, delete |
+| Generation requests | generation_requests | Read |
+| LLM responses | llm_responses | Read |
+| Allowed signup domains | allowed_signup_domains | Create, read, update, delete |
+| Whitelisted emails | whitelisted_emails | Create, read, update, delete |
+| Images | images / admin-images bucket | Upload, create, read, update, delete |
+| AI generated media | ai_generations | View existing posts; previous management tools retained |
+
+Lists support literal search and 25-record pagination. Records have detail views;
+editable references have searchable selectors. Deletes require typing DELETE, and
+foreign keys block deletion of referenced terms, providers, models, or images.
+Images accept PNG/JPEG/WebP signatures, up to 3 MB (below Vercel's request limit),
+use immutable storage paths, and display five-minute signed previews. Image bytes
+are replaced by uploading a new object and changing the record reference. Cleanup
+failures are surfaced without misreporting a committed database save as failed.
+
+Supporting tables start empty; no demo chains or fabricated LLM/request logs are
+inserted. Chain definitions and steps come from the generation pipeline or the
+database owner. A new chain automatically receives one editable mix entry.
+The existing Melon generator still calls Gemini directly: it does not yet consume
+these chains/mix/examples/model settings or write request/response telemetry.
+Likewise, signup lists are manageable configuration, not a new signup enforcement
+policy. Wiring either into Melon is a separate behavior change. No existing users
+are blocked or promoted by changing these lists.
+
+New tables revoke direct anon/authenticated access and enable RLS. All catalog RPCs
+check the verified Google OAuth superadmin flag on each request. Table and writable
+field names are fixed allowlists, so these endpoints cannot edit profiles or roles,
+write read-only logs, or execute caller-supplied SQL. Restrictive storage policies
+protect the new bucket even when legacy permissive storage policies exist.
+Provider records store no credentials; API keys stay in server environment variables.
+
+Additional validation:
+
+```sh
+npm test
+npm run lint
+npm run build
+# Disposable local database only, after the existing fixtures/migrations + 004:
+psql ... -v ON_ERROR_STOP=1 -f tests/catalog-access.sql
+```
+
+The rollback-only SQL suite covers CRUD, reference integrity, literal searching,
+read-only enforcement, invalid payload fields, anonymous/non-admin/password-session
+denial, private uploads, and immediate role revocation. Existing admin SQL tests
+continue to verify media and rating privacy.

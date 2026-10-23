@@ -11,8 +11,8 @@ create function auth.jwt() returns jsonb language sql stable as $$ select coales
 create table public.profiles(id uuid primary key references auth.users(id), email text, first_name text, last_name text, avatar_url text);
 create table public.ai_generations(id uuid primary key default gen_random_uuid(), user_id uuid not null references auth.users(id), image_path text not null, prompt text not null, caption text not null, created_at timestamptz default now());
 create table public.generation_votes(generation_id uuid references public.ai_generations(id) on delete cascade, user_id uuid references auth.users(id), vote int not null check(vote in(-1,1)), created_at timestamptz default now(), primary key(generation_id,user_id));
-create table storage.buckets(id text primary key, public boolean default false);
-insert into storage.buckets values('generated-media',false);
+create table storage.buckets(id text primary key, public boolean default false, name text, file_size_limit bigint, allowed_mime_types text[]);
+insert into storage.buckets(id,public) values('generated-media',false);
 create table storage.objects(id uuid primary key default gen_random_uuid(), bucket_id text references storage.buckets(id), name text);
 create function storage.foldername(path text) returns text[] language sql as $$ select string_to_array(path,'/') $$;
 grant usage on schema public,auth,storage to anon,authenticated;
