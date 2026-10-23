@@ -46,5 +46,5 @@ export async function catalogStats() {
   const { data,error } = await supabase.rpc('admin_catalog_stats')
   if (error?.code === 'PGRST202') return null
   if (error) throw new Error('Unable to load generation statistics.')
-  return data as { chains:number; terms:number; examples:number; images:number; requests:number; failed:number; responses:number; tokens:number; mean_latency_ms:number|null; mix:{name:string;weight:number;enabled:boolean}[] }
+  return data as { chains:number; terms:number; examples:number; images:number; post_images?:number; live_requests?:number; imported_requests?:number; requests:number; failed:number; responses:number; tokens:number; mean_latency_ms:number|null; mix:{name:string;weight:number;enabled:boolean}[] }
 }

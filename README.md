@@ -158,14 +158,14 @@ use immutable storage paths, and display five-minute signed previews. Image byte
 are replaced by uploading a new object and changing the record reference. Cleanup
 failures are surfaced without misreporting a committed database save as failed.
 
-Supporting tables start empty; no demo chains or fabricated LLM/request logs are
-inserted. Chain definitions and steps come from the generation pipeline or the
+Migration 004 creates empty supporting tables; migration 005 connects them to the
+real posting flow and imports existing saved posts with explicit source labels. Chain definitions and steps come from the generation pipeline or the
 database owner. A new chain automatically receives one editable mix entry.
-The existing Melon generator still calls Gemini directly: it does not yet consume
-these chains/mix/examples/model settings or write request/response telemetry.
-Likewise, signup lists are manageable configuration, not a new signup enforcement
-policy. Wiring either into Melon is a separate behavior change. No existing users
-are blocked or promoted by changing these lists.
+After migration 005 and the corresponding Melon deployment, caption generation uses
+active chain weights, ordered steps, and enabled Gemini model/provider settings.
+Signup lists remain manageable configuration, not a new signup enforcement policy.
+Terms and examples are curated manually and are not auto-created by posting.
+No existing users are blocked or promoted by changing these lists.
 
 New tables revoke direct anon/authenticated access and enable RLS. All catalog RPCs
 check the verified Google OAuth superadmin flag on each request. Table and writable
@@ -188,3 +188,40 @@ The rollback-only SQL suite covers CRUD, reference integrity, literal searching,
 read-only enforcement, invalid payload fields, anonymous/non-admin/password-session
 denial, private uploads, and immediate role revocation. Existing admin SQL tests
 continue to verify media and rating privacy.
+
+## Connecting real posts and generation activity (migration 005)
+
+Run `supabase/005-connect-generation-pipeline.sql` in the same Melon Supabase SQL
+Editor after 004. Keep RLS enabled. The script preserves existing posts and:
+
+- Adds the actual Google Gemini provider/model and Melon caption chain/step/mix
+  matching the previous production behavior. Reruns preserve admin edits.
+- Imports existing posts as `media_backfill` requests and `saved_caption` outputs.
+  Original model/chain assignment, latency, and token counts stay null because those
+  values were not recorded. Counts and imported captions reflect real saved posts.
+- Adds live request/response RPCs scoped to the signed-in creator and permitted
+  community. Ordinary users cannot read admin tables or anyone else's requests.
+- Snapshots each execution plan, applies weighted selection, excludes disabled
+  providers/models, limits chains to five steps, and bounds active requests.
+- Records real provider text, token usage (when supplied), and elapsed time for new
+  Melon generations. Post creation and request completion commit together. Retried
+  finalization returns the same post; it cannot publish duplicates.
+- Uses insert triggers to capture manual admin posts and older deployed clients as
+  `saved_post` history without claiming real provider telemetry.
+
+The Images page also reads `generated-media` through the existing protected media
+RPC. Post images appear immediately and link to the post's existing replacement and
+delete controls. Separately uploaded reference images retain their private bucket,
+reference integrity checks, and independent pagination.
+
+Melon's server sends the Gemini key only to Google's fixed API endpoint. Provider
+records cannot redirect credentials. Other provider protocols are not implemented.
+If 005 is missing during rollout, Melon retains its previous caption behavior; only
+that specific missing-RPC condition permits fallback. Permission or configuration
+errors do not silently bypass tracking or enabled states.
+
+Additional disposable SQL regression: `tests/generation-tracking.sql` (after 005).
+It covers chain order, true usage fields, foreign-request denial, private membership,
+immutable links, manual post imports, mix selection, disabled providers, request
+limits, failure states, and publication idempotency. Historical backfill and migration
+reruns were also checked against two saved-post fixtures with unknown usage left null.
