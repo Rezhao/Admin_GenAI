@@ -1,0 +1,67 @@
+-- Disposable database only, after migrations 001, 004, 005 and 006.
+begin;
+create function pg_temp.check_true(value boolean,message text) returns void language plpgsql as $$ begin if value is distinct from true then raise exception 'FAIL: %',message; end if; end $$;
+create function pg_temp.denied(statement text) returns void language plpgsql as $$ begin begin execute statement; exception when insufficient_privilege then return; end; raise exception 'FAIL: statement allowed: %',statement; end $$;
+insert into auth.users(id,email,email_confirmed_at,raw_app_meta_data) values
+ ('81000000-0000-4000-8000-000000000001','admin@columbia.edu',now(),'{"provider":"google"}'),
+ ('81000000-0000-4000-8000-000000000002','member@other.edu',now(),'{"provider":"google"}');
+insert into auth.identities(user_id,provider) values('81000000-0000-4000-8000-000000000001','google'),('81000000-0000-4000-8000-000000000002','google');
+insert into public.profiles(id,email,first_name,is_superadmin) select id,email,case when email='admin@columbia.edu' then 'Admin' else 'Member' end,email='admin@columbia.edu' from auth.users;
+set local role anon;
+select pg_temp.denied($q$select public.admin_record_context('terms',gen_random_uuid())$q$);
+select pg_temp.denied($q$select public.melon_before_user_created('{"user":{"email":"any@columbia.edu"}}')$q$);
+set local role authenticated;
+select set_config('request.jwt.claims','{"sub":"81000000-0000-4000-8000-000000000002","app_metadata":{"provider":"google"},"amr":[{"method":"oauth"}]}',true);
+select pg_temp.denied($q$select public.admin_record_context('terms',gen_random_uuid())$q$);
+select pg_temp.denied($q$select public.admin_reference_labels('{"user_id":"81000000-0000-4000-8000-000000000001"}')$q$);
+select pg_temp.denied($q$select * from public.term_types$q$);
+select pg_temp.denied($q$select public.melon_before_user_created('{"user":{"email":"any@columbia.edu"}}')$q$);
+select set_config('request.jwt.claims','{"sub":"81000000-0000-4000-8000-000000000001","app_metadata":{"provider":"google"},"amr":[{"method":"oauth"}]}',true);
+do $$ declare term uuid; context jsonb; request_id uuid; plan jsonb; begin
+ term:=public.admin_catalog_save('terms',null,'{"term":"test phrase","definition":"A definition","term_type_id":"d6500000-0000-4000-8000-000000000004","usage_example":"An example sentence.","priority":75,"enabled":true}');
+ perform pg_temp.check_true(public.admin_catalog_get('terms',term)->>'created_by'=auth.uid()::text,'audit creator uses signed-in admin');
+ perform public.admin_catalog_save('terms',term,'{"priority":80}');
+ perform pg_temp.check_true(public.admin_catalog_get('terms',term)->>'updated_by'=auth.uid()::text,'audit updater');
+ perform pg_temp.check_true(public.admin_catalog_get('terms',term)->>'updated_at' is not null,'audit timestamp');
+ perform pg_temp.check_true(public.admin_record_context('terms',term)->'labels'->>'term_type_id'='Expression','term type resolves');
+ begin perform public.admin_catalog_save('terms',term,'{"created_by":"81000000-0000-4000-8000-000000000002"}'); raise exception 'FAIL: spoofed actor'; exception when sqlstate 'P0001' then if sqlerrm like 'FAIL:%' then raise; end if; end;
+ begin perform public.admin_catalog_save('terms',term,'{"priority":101}'); raise exception 'FAIL: invalid priority'; exception when check_violation then null; end;
+ perform pg_temp.check_true(jsonb_array_length(public.admin_catalog_options('term-types'))>=4,'term types available');
+ context:=public.admin_record_context('prompt-chains','d6300000-0000-4000-8000-000000000002');
+ perform pg_temp.check_true(jsonb_array_length(context->'steps')=3,'three ordered reference steps');
+ perform pg_temp.check_true((context->'steps'->0->>'step_order')::int=1,'step order');
+ perform pg_temp.check_true(context->'mix'->>'enabled'='false','optional workflow excluded initially');
+ plan:=public.begin_caption_request('A real test caption direction',null); request_id:=(plan->>'request_id')::uuid;
+ perform public.record_caption_response_details(request_id,'d6400000-0000-4000-8000-000000000001','A test caption.',12,8,200,'Exact submitted text.');
+ context:=public.admin_record_context('chain-runs',request_id);
+ perform pg_temp.check_true(context->'profile'->>'email'='admin@columbia.edu','run links profile');
+ perform pg_temp.check_true(context->'responses'->0->>'submitted_prompt'='Exact submitted text.','submitted prompt logged');
+ perform pg_temp.check_true(context->'responses'->0->'step_snapshot'->>'model_key'='gemini-flash-lite-latest','snapshot model');
+ perform pg_temp.check_true(context->'responses'->0->>'input_tokens'='12','actual usage');
+ perform pg_temp.check_true(public.admin_catalog_get('chain-runs',request_id) is not null,'run endpoint reads execution');
+ perform pg_temp.check_true((public.admin_catalog_list('chain-runs')->>'total')::int=1,'run list excludes history without a plan');
+ perform public.admin_catalog_delete('terms',term);
+ perform pg_temp.check_true(public.admin_catalog_get('terms',term) is null,'term delete works');
+end $$;
+reset role;
+insert into public.whitelisted_emails(email) values('exception@other.edu');
+insert into public.allowed_signup_domains(domain,enabled) values('disabled.edu',false);
+set local role supabase_auth_admin;
+select pg_temp.check_true(public.melon_before_user_created('{"user":{"email":" New@Columbia.EDU "}}')='{}'::jsonb,'enabled domain and normalization');
+select pg_temp.check_true(public.melon_before_user_created('{"user":{"email":"exception@other.edu"}}')='{}'::jsonb,'exact email exception');
+select pg_temp.check_true(public.melon_before_user_created('{"user":{"email":"notexception@other.edu"}}')->'error'->>'http_code'='403','unlisted denied');
+select pg_temp.check_true(public.melon_before_user_created('{"user":{"email":"new@sub.columbia.edu"}}')->'error' is not null,'subdomain not implicitly allowed');
+select pg_temp.check_true(public.melon_before_user_created('{"user":{"email":"new@disabled.edu"}}')->'error' is not null,'disabled domain denied');
+select pg_temp.check_true(public.melon_before_user_created('{"user":{}}')->'error' is not null,'missing email denied');
+reset role;
+update public.allowed_signup_domains set enabled=false;
+update public.whitelisted_emails set enabled=false;
+set local role supabase_auth_admin;
+select pg_temp.check_true(public.melon_before_user_created('{"user":{"email":"new@columbia.edu"}}')->'error' is not null,'empty enabled lists fail closed');
+reset role;
+-- Existing users are untouched, regardless of their domain.
+select pg_temp.check_true(exists(select 1 from auth.users where email='member@other.edu'),'existing account preserved');
+update public.profiles set is_superadmin=false where id='81000000-0000-4000-8000-000000000001';
+set local role authenticated;
+select pg_temp.denied($q$select public.admin_record_context('terms',gen_random_uuid())$q$);
+rollback;

@@ -48,3 +48,22 @@ export async function catalogStats() {
   if (error) throw new Error('Unable to load generation statistics.')
   return data as { chains:number; terms:number; examples:number; images:number; post_images?:number; live_requests?:number; imported_requests?:number; requests:number; failed:number; responses:number; tokens:number; mean_latency_ms:number|null; mix:{name:string;weight:number;enabled:boolean}[] }
 }
+export type InspectionContext = {
+  labels?: Record<string,string>; request_labels?: Record<string,string>;
+  chain?: CatalogRecord; steps?: CatalogRecord[]; runs?: CatalogRecord[]; run_count?: number; mix?: CatalogRecord;
+  request?: CatalogRecord; profile?: {id:string;name:string;email:string};
+  media?: CatalogRecord; responses?: CatalogRecord[];
+}
+export async function recordContext(slug:string,id:string):Promise<InspectionContext|null> {
+  const {supabase}=await requireAdmin()
+  validId(id)
+  const {data,error}=await supabase.rpc('admin_record_context',{resource:slug,target:id})
+  if(error?.code==='PGRST202') return null
+  if(error) throw new Error('Unable to load related records. Check the admin details migration.')
+  const context=data as InspectionContext|null
+  if(context?.media?.image_path) {
+    const {data}=await supabase.storage.from('generated-media').createSignedUrl(String(context.media.image_path),300)
+    context.media.image_url=data?.signedUrl
+  }
+  return context
+}

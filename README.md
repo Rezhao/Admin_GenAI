@@ -225,3 +225,59 @@ It covers chain order, true usage fields, foreign-request denial, private member
 immutable links, manual post imports, mix selection, disabled providers, request
 limits, failure states, and publication idempotency. Historical backfill and migration
 reruns were also checked against two saved-post fixtures with unknown usage left null.
+
+
+## Reference-style admin details (migration 006)
+
+Apply `supabase/006-admin-reference-details.sql` after 005, keeping RLS enabled.
+Then enable Authentication → Hooks → Before User Created using the Postgres
+function `public.melon_before_user_created`. This hook runs only when a new Auth
+user is created. Existing users can still sign in regardless of their domain.
+New accounts must match an enabled exact domain **or** an enabled email exception.
+Subdomains are separate domains. Empty enabled lists deny new signups. The initial
+allowed domain is `columbia.edu`; edit both lists in the admin console. Signup
+permission never grants the superadmin flag. Hook execution is granted only to
+Supabase's auth service role, with SELECT-only RLS access to the two allowlists.
+See [Supabase's hook documentation](https://supabase.com/docs/guides/auth/auth-hooks/before-user-created-hook).
+
+The console now includes:
+
+- **Terms:** cards with term type, definition, usage example, priority (0–100),
+  category, enabled state, and created/updated timestamps; full CRUD with guarded
+  payloads and foreign-key checks. **Term types** have their own CRUD page.
+- **Prompt chains:** reusable workflow definitions, ordered step cards, model/API
+  identifiers, temperature, image-and-text input and text output, expandable
+  instructions/templates, mix controls, and recent execution links.
+- **Prompt chain runs:** a separate read-only list of actual requests with saved
+  execution plans. A run and its request share an ID because Melon executes one
+  workflow per request. Imported posts without a plan are not presented as runs.
+- **Requests / responses:** user and email, community, lifecycle timestamps,
+  original caption direction, signed image preview, saved caption, step snapshots,
+  actual token counts and latency, and formatted response text/JSON. New Melon
+  deployments also log the exact combined prompt sent to Gemini. Historical
+  unknowns stay unknown; hidden model thought parts are never recorded.
+- **Models / providers and curated records:** actor IDs and timestamps for new
+  creations/edits. Older records retain unknown actors. Audit fields are excluded
+  from mutation allowlists and maintained by database triggers.
+
+Migration 006 adds original Melon vocabulary, a curated caption example, and an
+optional three-step campus workflow (observe → develop angle → final caption).
+These are configuration/reference records, not fabricated generation history.
+The new workflow starts disabled with weight 0. To demonstrate it: open Prompt
+chain mix, enable its entry and set a positive weight. Disable the original chain
+if you want every new generation to use the three-step workflow. Otherwise weights
+are relative and selection is randomized. This makes additional real Gemini calls.
+Definitions and steps are read-only in the admin area, as required by the assignment;
+change them via owner SQL. Terms/examples are curated references and are not
+implicitly injected into prompts. Templates support `{{prompt}}` and
+`{{previous_response}}` only.
+
+All inspectors use guarded, bounded database RPCs. Lists resolve friendly names
+alongside IDs; chain details show the latest 25 runs with a link to paginated history.
+The original Google-only superadmin wall, media CRUD, image upload/replacement,
+users and ratings readers remain in place.
+
+Validation: `npm test`, `npm run lint`, `npm run build`, and the rollback-only
+`tests/reference-details.sql` suite after migrations 001/004/005/006. The latter
+checks actor spoofing, priority bounds, linked records, execution snapshots,
+read-only runs, exact prompt recording, role revocation, and signup allow/deny rules.

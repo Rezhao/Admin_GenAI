@@ -24,3 +24,17 @@ test('references and integer model limits are validated',()=>{
 test('provider URLs cannot carry credentials or unsupported protocols',()=>{
   for(const base_url of ['http://example.com','javascript:alert(1)','https://name:secret@example.com']) assert.throws(()=>resourceInput(resourceBySlug('providers'),form({name:'Provider',base_url})))
 })
+
+test('term priorities are bounded integers and audit fields cannot enter the payload',()=>{
+ const resource=resourceBySlug('terms')
+ for(const priority of ['-1','101','1.5','NaN']) assert.throws(()=>resourceInput(resource,form({term:'Campus',definition:'A definition',priority})))
+ const payload=resourceInput(resource,form({term:'Campus',definition:'A definition',priority:'75',usage_example:'A campus caption.',created_by:'spoofed',updated_at:'spoofed'}))
+ assert.equal(payload.priority,75)
+ assert.equal(payload.usage_example,'A campus caption.')
+ assert.equal('created_by' in payload,false)
+ assert.equal('updated_at' in payload,false)
+})
+test('workflow executions remain read-only and vocabulary types support CRUD',()=>{
+ assert.equal(resourceBySlug('chain-runs').mode,'read')
+ assert.equal(resourceBySlug('term-types').mode,'crud')
+})

@@ -1,6 +1,7 @@
 -- Disposable local PostgreSQL only. Never run this on the hosted project.
 create role anon nologin;
 create role authenticated nologin;
+create role supabase_auth_admin nologin;
 create role service_role nologin bypassrls;
 create schema auth;
 create schema storage;
