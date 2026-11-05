@@ -1,0 +1,13 @@
+export type SectionLink={href:string;label:string;exact?:boolean}
+export type AdminSection={id:string;label:string;description:string;icon:string;links:SectionLink[]}
+export const adminSections:AdminSection[]=[
+ {id:'overview',label:'Overview',description:'A look at your community.',icon:'M3 3h7v7H3z M14 3h7v7h-7z M3 14h7v7H3z M14 14h7v7h-7z',links:[{href:'/',label:'Overview',exact:true}]},
+ {id:'people',label:'People & access',description:'Browse profiles and manage who can sign up.',icon:'M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2 M16 3a4 4 0 0 1 0 8 M13 7a4 4 0 1 1-8 0 4 4 0 0 1 8 0',links:[{href:'/profiles',label:'Users / profiles'},{href:'/manage/signup-domains',label:'Allowed domains'},{href:'/manage/whitelisted-emails',label:'Email whitelist'}]},
+ {id:'media',label:'Media & ratings',description:'Manage generated posts and images, and inspect their ratings.',icon:'M4 3h16v18H4z M4 17l5-5 4 4 3-3 4 4 M9 7h.01',links:[{href:'/media',label:'Posts & captions'},{href:'/manage/images',label:'Images'},{href:'/ratings',label:'Ratings'}]},
+ {id:'pipeline',label:'Prompt pipeline',description:'Inspect workflow definitions, ordered steps, and chain selection.',icon:'M4 4h6v6H4z M14 14h6v6h-6z M10 7h7v7',links:[{href:'/manage/prompt-chains',label:'Prompt chains'},{href:'/manage/prompt-chain-steps',label:'Chain steps'},{href:'/manage/prompt-chain-mix',label:'Chain mix'}]},
+ {id:'activity',label:'Generation activity',description:'Follow generation requests through saved runs and model responses.',icon:'M3 12h4l3-8 4 16 3-8h4',links:[{href:'/manage',label:'Summary',exact:true},{href:'/manage/generation-requests',label:'Requests'},{href:'/manage/chain-runs',label:'Chain runs'},{href:'/manage/llm-responses',label:'LLM responses'}]},
+ {id:'reference',label:'Reference library',description:'Curate vocabulary, term types, and example captions.',icon:'M4 3h13v18H4z M17 3h3v18h-3 M7 8h7 M7 12h7 M7 16h4',links:[{href:'/manage/terms',label:'Terms'},{href:'/manage/term-types',label:'Term types'},{href:'/manage/examples',label:'Generation examples'}]},
+ {id:'llm',label:'LLM settings',description:'Manage models and their providers.',icon:'M8 3v3 M16 3v3 M8 18v3 M16 18v3 M3 8h3 M3 16h3 M18 8h3 M18 16h3 M6 6h12v12H6z',links:[{href:'/manage/models',label:'Models'},{href:'/manage/providers',label:'Providers'}]},
+]
+export function isSectionLinkActive(link:SectionLink,path:string){return path===link.href||(!link.exact&&path.startsWith(link.href+'/'))}
+export function sectionForPath(path:string){return adminSections.find(section=>section.links.some(link=>isSectionLinkActive(link,path)))}
